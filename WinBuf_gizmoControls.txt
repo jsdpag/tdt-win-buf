@@ -14,4 +14,6 @@ Standard Gizmo controls that any user windowed buffer requires.
 12) EventSec - Seconds value at StrobeIn rising.
 ---
 Array parameters
-i. MCsamples
+  i. Minutes - 'Minutes' time stamp for each sample in MCsamples.
+ ii. Seconds - 'Seconds' time stamp for each sample in MCsamples.
+iii. MCsamples - Sampled data e.g. spikes or LFPs. 4 or more values per sample.
