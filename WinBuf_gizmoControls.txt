@@ -5,7 +5,7 @@ Standard Gizmo controls that any user windowed buffer requires.
  3) DownSamp - Number of samples (parent device rate) per write to buffer.
  4) BitsPerVal - Number of bits per value. If < 32, indicates compression.
  5) ScaleFactor - Scaling factor applied to values before compressing.
- 6) CompDomain - Compression domain, numeric value encoding. 1: channels, 2: time.
+ 6) CompDomain - Compression domain. 0: no comp, 1: channels, 2: time.
  7) BuffSizeMC - Total buffer size, in elements.
  8) RespWin - Duration of response window timer, in samples at parent device rate.
  9) StartBuff - Reset buffer and resume buffering.
