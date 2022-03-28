@@ -29,6 +29,9 @@ An example Synapse experiment. This can be used with MCSpkWinBuf_test.m (see bel
 
 ## MATLAB code for ARCADE PC
 
+### TdtWinBuf.m
+MATLAB class definition. Allows access via SynapseAPI to windowed buffer Gizmos running on the TDT system. It is intended to function with all variants of the windowed buffer Gizmos, thus requiring them to have a standardised interface. This class helps with setting buffer size and response window width by automatically converting from seconds to samples. It also reads in buffered data and applies whatever data type conversion and decompression is necessary.
+
 ### MCSpkWinBuf_test.m
 For testing the MCSpkWinBuf and MCLfpWinBuf Gizmos. This requires the MCSimEphys Gizmo. It tells the MCSimEphys Gizmo when to modulate firing rates and LFPs, such that a transient response to an event is generated with increasing latency across channels. Requires latest copy of ARCADE (see below).
 
