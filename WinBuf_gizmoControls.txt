@@ -4,7 +4,7 @@ Standard Gizmo controls that any user windowed buffer requires.
  2) ChanPerSamp - Buffer elements per MC sample.
  3) DownSamp - Number of samples (parent device rate) per write to buffer.
  4) BitsPerVal - Number of bits per value. If < 32, indicates compression.
- 5) ScaleFactor - Scaling factor applied to values before buffering.
+ 5) ScaleFactor - Scaling factor applied to values before compressing.
  6) BuffSizeMC - Total buffer size, in elements.
  7) RespWin - Duration of response window timer, in samples at parent device rate.
  8) StartBuff - Reset buffer and resume buffering.
