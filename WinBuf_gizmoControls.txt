@@ -3,15 +3,17 @@ Standard Gizmo controls that any user windowed buffer requires.
  1) BuffSize - Buffer size in MC samples.
  2) ChanPerSamp - Buffer elements per MC sample.
  3) DownSamp - Number of samples (parent device rate) per write to buffer.
- 4) BuffSizeMC - Total buffer size, in elements.
- 5) RespWin - Duration of response window timer, in samples at parent device rate.
- 6) StartBuff - Reset buffer and resume buffering.
- 7) Mindex - Minutes buffer index.
- 8) Sindex - Seconds buffer index.
- 9) MCindex - Elements containing buffered MC samples.
-10) Counter - Total number of buffered MC samples since Reset.
-11) EventMin - Minutes value at StrobeIn rising.
-12) EventSec - Seconds value at StrobeIn rising.
+ 4) BitsPerVal - Number of bits per value. If < 32, indicates compression.
+ 5) ScaleFactor - Scaling factor applied to values before buffering.
+ 6) BuffSizeMC - Total buffer size, in elements.
+ 7) RespWin - Duration of response window timer, in samples at parent device rate.
+ 8) StartBuff - Reset buffer and resume buffering.
+ 9) Mindex - Minutes buffer index.
+10) Sindex - Seconds buffer index.
+11) MCindex - Elements containing buffered MC samples.
+12) Counter - Total number of buffered MC samples since Reset.
+13) EventMin - Minutes value at StrobeIn rising.
+14) EventSec - Seconds value at StrobeIn rising.
 ---
 Array parameters
   i. Minutes - 'Minutes' time stamp for each sample in MCsamples.
