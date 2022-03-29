@@ -311,14 +311,21 @@ for  F = { 'bspk' , 'blfp' } , f = F{ 1 } ;
   giz = C.gizmo.( f ) ;
   
   % Get all scalar buffering information
-  for  PAR = { 'BuffSize' , 'ChanPerSamp' , 'DownSamp' , 'BuffSizeMC' , ...
-       'RespWin' , 'Mindex' , 'Sindex' , 'MCindex' , 'Counter' , ...
-         'EventMin' , 'EventSec' } , par = PAR{ 1 } ;
+  for  PAR = { 'BuffSize' , 'ChanPerSamp' , 'DownSamp' , 'BitsPerVal' , ...
+      'ScaleFactor' , 'CompDomain' , 'BuffSizeMC' , 'RespWin' , ...
+        'Mindex' , 'Sindex' , 'MCindex' , 'Counter' , 'EventMin' , ...
+          'EventSec' } , par = PAR{ 1 } ;
 
     giz.( par ) = C.syn.getParameterValue( giz.nam , par );
 
   end % bspk size
 
+  % Compute number of MC samples after compression
+  switch  f
+    case  'bspk' , bufsiz = giz.BuffSize ;
+    case  'blfp' , bufsiz = giz.BuffSize / 2 ;
+  end
+  
   % Read in buffered time stamps ...
   giz.Minutes = readbuf( C , giz , giz.Mindex , 'Minutes' , giz.BuffSize );
   giz.Seconds = readbuf( C , giz , giz.Sindex , 'Seconds' , giz.BuffSize );
@@ -361,20 +368,52 @@ for  F = { 'bspk' , 'blfp' } , f = F{ 1 } ; giz = C.gizmo.( f ) ;
   % Point to multi-channel samples
   mc = giz.MCsamples ;
   
-  % This is the spike buffer
-  if  strcmp( giz.nam , C.gizmo.bspk.nam )
+  % Decompress data according to compression scheme
+  switch  giz.nam
     
-    % Bytes are compressed into 32-bit integers. Adjust number of channels,
-    % convert unit from number of 32-bit ints to total compression capacity
-    % in ephys channels
-    N = N * C.int.EchansPerWord ;
-    
-    % And then de-compress the data by splitting it into bytes
-    mc = typecast( mc , C.int.byte ) ;
-    
-  end % spk buf
+    % Spike windowed buffer - Extract sort codes
+    case  C.gizmo.bspk.nam
+      
+      % Bytes are compressed into 32-bit integers. Adjust number of
+      % channels, convert unit from number of 32-bit ints to total
+      % compression capacity in ephys channels
+      N = N * C.int.EchansPerWord ;
 
-  % Reshape into spikes x channels(bytes)
+      % And then de-compress the data by splitting it into bytes
+      mc = typecast( mc , C.int.byte ) ;
+      
+    % LFP windowed buffer - extract time points
+    case  C.gizmo.blfp.nam
+      
+      % Data is stored as int32, so convert data back to this
+      mc = cast( mc , 'int32' ) ;
+      
+      % Two MC samples packed as pair of int16 into each int32. Extract
+      % them.
+      mc = typecast( mc , 'int16' ) ;
+      
+      % Cast to double and then remove scaling factor
+      mc = cast( mc , 'double' ) ./ giz.ScaleFactor ;
+      
+      % Column vector has organisation [samp i [c1 [t,t+1], c2 [t,t+1], ...
+      % In which there are two LFP samples in time per channel per MC
+      % sample. Reorganise the data into time x channel x MC sample.
+      mc = reshape( mc , 2 , N , [ ] ) ;
+      
+      % Permute this matrix to channel x time x MC sample. It is now ready
+      % to be reshaped into time x channels, below.
+      mc = permute( mc , [ 2 , 1 , 3 ] ) ;
+      
+      % Don't forget to decompress the time vector. Add new time stamps.
+      tim = tim' + [ 0 ; 1 / ( C.fs / giz.DownSamp ) ] ;
+      
+      % Convert back into column vector
+      tim = tim( : ) ;
+      
+    otherwise , error( 'Programming error' )
+  end % decompress
+
+  % Reshape into spikes/times x channels(bytes)
   mc = reshape( mc , N , [ ] )' ;
 
     % Sanity check, row count this should equal the number of time stamps

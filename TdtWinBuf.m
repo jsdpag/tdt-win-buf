@@ -30,15 +30,29 @@ classdef  TdtWinBuf  <  handle
     % least this set. Note, in SynapseAPI, the term "parameter" seems to
     % refer to the Synapse Gizmo control, accessed in RFvdsEx with the
     % gizmoControl macro.
-    REQPAR = { 'BuffSize' , 'ChanPerSamp' , 'DownSamp' , 'BuffSizeMC' , ...
-      'RespWin' , 'StartBuff' , 'Mindex' , 'Sindex' , 'MCindex' , ...
-        'Counter' , 'EventMin' , 'EventSec' , 'Minutes' , 'Seconds' , ...
-          'MCsamples' }
+    REQPAR = { 'BuffSize' , 'ChanPerSamp' , 'DownSamp' , 'BitsPerVal' , ...
+      'ScaleFactor' , 'CompDomain' , 'BuffSizeMC' , 'RespWin' , ...
+        'StartBuff' , 'Mindex' , 'Sindex' , 'MCindex' , 'Counter' , ...
+          'EventMin' , 'EventSec' , 'Minutes' , 'Seconds' , 'MCsamples' } ;
     
     % Bits per number (word, value, element) buffered on TDT system
     BITNUM = 32 ;
+    
+    % The reverse lookup table, take the domain code +1 as an index for
+    % this cell array, to return the name of the compressed domain
+    COMNAM = { 'none' , 'channels' , 'time' } ;
 
   end % constants
+  
+  
+  % Don't save these properties if TdtWinBuf is stored to disk
+  properties  ( Transient )
+    
+    % Instance of SynapseAPI object
+    syn = [ ] ;
+    
+  end % transient prop
+  
   
   % Only TdtWinBuf can read/write these properties. These contain
   % information about the Synapse custom Gizmo used to implement the
@@ -47,13 +61,13 @@ classdef  TdtWinBuf  <  handle
     
     % Name of specific windowed buffer Gizmo, a specific instance, to be
     % read by this TdtWinBuf
-    gname = '' ;
+    name = '' ;
     
     % Information about the Gizmo
-    ginfo = [ ] ;
+    info = [ ] ;
     
     % Gizmo's parent device
-    gparent = '' ;
+    parent = '' ;
     
     % Cell array of char arrays, naming each Gizmo control, or parameter,
     % that is visible to SynapseAPI
@@ -62,7 +76,10 @@ classdef  TdtWinBuf  <  handle
     % Information about each parameter, this will be a struct. Each field
     % will be named after a parameter in .param, and contain information
     % about that parameter, as returned by SynapseAPI.
-    pinfo = [ ] ;
+    ipar = [ ] ;
+    
+    % 'Seconds' per 'Minute'
+    secpermin = [ ] ;
     
     % Parent device sampling rate. Buffered time stamps count the number of
     % samples at this rate.
@@ -74,13 +91,22 @@ classdef  TdtWinBuf  <  handle
     
     % Cast buffered data into this type after reading. Empty string takes
     % default return value from SynapseAPI, which is double.
-    rcast = '' ;
+    rcast = 'double' ;
     
     % Typecast buffered data into new numeric type. Read in data as a
     % string of bits, and cast every contiguous block of bits into this
     % type. Ignored if empty. This is required to decompress spike sorter
     % Gizmo SortCodes.
-    tcast = '' ;
+    tcast = 'double' ;
+    
+    % Name of compression method used
+    comnam = '' ;
+    
+    % Compression factor. Number of values stored per word e.g. 32-bit.
+    comfac = [ ] ;
+    
+    % Buffer size, in number of compressed multi-channel samples
+    cbsize = [ ] ;
     
     % Buffer size in seconds, rounded up to next multi-channel sample at
     % buffering rate
@@ -97,14 +123,6 @@ classdef  TdtWinBuf  <  handle
     data = [ ] ;
     
   end % private param
-  
-  % Don't save these properties if TdtWinBuf is stored to disk
-  properties  ( Transient )
-    
-    % Instance of SynapseAPI object
-    syn
-    
-  end % transient prop
   
   
   %%% METHODS %%%
@@ -150,58 +168,63 @@ classdef  TdtWinBuf  <  handle
       end % can't find winbufgiz
       
       % Store gizmo name
-      obj.gname = winbufgiz ;
+      obj.name = winbufgiz ;
       
       %-- Gizmo info --%
       
       % Specific information about the windowed buffer gizmo
-      obj.ginfo = obj.syn.getGizmoInfo( obj.gname ) ;
+      obj.info = obj.syn.getGizmoInfo( obj.name ) ;
       
       % Parent device of this gizmo
-      obj.gparent = obj.syn.getGizmoParent( obj.gname ) ;
+      obj.parent = obj.syn.getGizmoParent( obj.name ) ;
       
-      % List of Gizmo's properties
-      obj.param = obj.syn.getParameterNames( obj.gname ) ;
+      % List of Gizmo's parameters i.e Gizmo controls
+      obj.param = obj.syn.getParameterNames( obj.name ) ;
       
       % Check that all required parameters are visible
       if  ~ all(  ismember( obj.param , obj.REQPAR )  )
         
         error( 'Windowed buffer Gizmo %s must have parameters: %s' , ...
-          obj.gname , strjoin( obj.param , ' , ' ) )
+          obj.name , strjoin( obj.param , ' , ' ) )
         
       end % missing param
       
       % Initialise empty struct for parameter info
-      obj.pinfo = struct ;
+      obj.ipar = struct ;
       
       % Gizmo parameters
       for  P = obj.param' , p = P{ 1 } ;
         
         % Fetch more details about this parameter
-        obj.pinfo.( p ) = obj.syn.getParameterInfo( obj.gname , p ) ;
+        obj.ipar.( p ) = obj.syn.getParameterInfo( obj.name , p ) ;
         
         % Parameter is an array, skip to next parameter. The .Array
-        % parameter will be array size if it is an array.
-        if  ~ strcmp( obj.pinfo.( p ).Array , 'No' ) , continue , end
+        % parameter will be the numeric array size, if it is an array.
+        if  ~ strcmp( obj.ipar.( p ).Array , 'No' ) , continue , end
           
         % Get current value of parameter
-        obj.pinfo.( p ).Value = obj.syn.getParameterValue( obj.gname, p ) ;
+        obj.ipar.( p ).Value = obj.syn.getParameterValue( obj.name, p ) ;
         
       end % params
+      
+      % Get Seconds per Minute
+      obj.secpermin = obj.ipar.Seconds.Max ;
+      
+      %-- Derived information --%
       
       % Get sampling rates of TDT devices
       fs = obj.syn.getSamplingRates ;
       
       % Remember sampling rate of parent device
-      obj.pfs = fs.( obj.gparent ) ;
+      obj.pfs = fs.( obj.parent ) ;
       
       % Sample buffering rate
-      obj.bfs = obj.pfs  ./  obj.pinfo.DownSamp.Value ;
+      obj.bfs = obj.pfs  ./  obj.ipar.DownSamp.Value ;
       
       % Point to info about MCsamples parameter
-      mcs = obj.pinfo.MCsamples ;
+      mcs = obj.ipar.MCsamples ;
       
-      % Buffers integer data type
+      % Multi-channel buffer stores an integer data type
       if  strcmp( mcs.Type , 'Int' )
         
         % Build name of integer type. Buffered data will be cast to this
@@ -213,13 +236,75 @@ classdef  TdtWinBuf  <  handle
         
       end % MCsamples casting
       
+      % MC data compression signalled by Gizmo
+      if  obj.ipar.CompDomain.Value
+        
+        % Each 32-bit word can be divided into consecutive groups bits
+        % (BitsPerVal bits per group). Breat each 32-bit word into
+        % consecutive values with this type, to decompress the data.
+        obj.tcast = sprintf( 'int%d' , obj.ipar.BitsPerVal.Value ) ;
+        
+        % Unsigned integer
+        if  mcs.Min >= 0 , obj.tcast = [ 'u' , obj.tcast ] ; end
+        
+      end % compression type
+      
+      % Uknown compression type
+      if  obj.ipar.CompDomain.Value <  0  ||  ...
+          obj.ipar.CompDomain.Value >= numel( obj.COMNAM )
+      
+        error( 'Uknown compression type in %s, code %d' , obj.name , ...
+          obj.ipar.CompDomain.Value )
+        
+      % Known type of compression algorithm
+      else
+        
+        % Fetch string naming this type of compression
+        obj.comnam = obj.COMNAM{ obj.ipar.CompDomain.Value + 1 } ;
+        
+      end % compression type
+      
+      % Calculate number of compressed values per buffered value
+      obj.comfac = obj.BITNUM  ./  obj.ipar.BitsPerVal.Value ;
+      
+      % Compute buffer size in number of compressed multi-channel samples,
+      % according to compression type. Note, we assume sampling across the
+      % time domain. Thus, only compression across the time domain will
+      % change the actual buffer size from that reported in BuffSize.
+      switch  obj.comnam
+        
+        % No compression. Or, compressed across channels domain.
+        case { 'none' , 'channels' }, obj.cbsize = obj.ipar.BuffSize.Value;
+          
+        % Here, we worry. Each compressed and buffered MC sample contains
+        % more than one sample in the time domain.
+        case  'time' , obj.cbsize = obj.ipar.BuffSize.Value ./ obj.comfac;
+          
+        % We should never get here
+        otherwise
+          
+          error( 'Programming error, invalid compression type: %s' , ...
+            obj.comnam )
+          
+      end % comp type
+      
       % Determine size of buffer, in seconds. Divide number of
       % multi-channel samples by buffering rate. samples * seconds/sample.
-      obj.bufsiz = obj.pinfo.BuffSize.Value ./ obj.bfs ;
+      obj.bufsiz = obj.ipar.BuffSize.Value ./ obj.bfs ;
       
       % Again, find the duration of the response window, in seconds. Use
       % parent device samplind rate, this time.
-      obj.respwin = obj.pinfo.RespWin.Value ./ obj.pfs ;
+      obj.respwin = obj.ipar.RespWin.Value ./ obj.pfs ;
+      
+      % Name buffer index parameter associated with each buffer parameter
+        obj.ipar.Minutes.inam = 'Mindex' ;
+        obj.ipar.Seconds.inam = 'Sindex' ;
+      obj.ipar.MCsamples.inam = 'MCindex' ;
+      
+      % Set number of elements per buffered MC sample, per buffer parameter
+        obj.ipar.Minutes.elpersamp = 1 ;
+        obj.ipar.Seconds.elpersamp = 1 ;
+      obj.ipar.MCsamples.elpersamp = obj.ipar.ChanPerSamp.Value ;
       
     end % TdtWinBuf
     
@@ -229,34 +314,182 @@ classdef  TdtWinBuf  <  handle
     function  startbuff( obj )
       
       % Raise Gizmo's StartBuff parameter to high i.e. true, 1, ON
-      obj.syn.setParameterValue( obj.gname , 'StartBuff' , 1 ) ;
+      obj.syn.setParameterValue( obj.name , 'StartBuff' , 1 ) ;
       
       % Immediately lower it again
-      obj.syn.setParameterValue( obj.gname , 'StartBuff' , 0 ) ;
+      obj.syn.setParameterValue( obj.name , 'StartBuff' , 0 ) ;
       
     end % startbuff
     
     
-    % Tell TdtWinBuf whether buffered data are SortCodes. Input is True or
-    % False. If True, then type-casting integer type is set appropriately.
-    % If False then no type-casting is used.
-    function  sortcodes( obj , sc )
+    % Set the size of the buffer, in seconds
+    function  setbufsiz( obj , sec )
       
-      % Buffered data contains SortCodes
-      if  sc
-        
-        % Successive ephys channel encoded by successive bytes
-        obj.tcast = 'uint8' ;
-        
-      % Buffered data does not contain SortCodes
-      else
-        
-        % No typecasting
-        obj.tcast = '' ;
-        
-      end % switch on/off typecasting
+      % Error check input, guarantee double
+      sec = obj.checksec( sec ) ;
       
-    end % SortCodes
+      % Compute buffer size in number of MC samples that it can store, with
+      % or without compression. Round up to next sample.
+      n = ceil( sec .* obj.bfs ) ;
+      
+      % Cap at maximum buffer size
+      n = max( n , obj.ipar.BuffSize.Max ) ;
+      
+        % Convert this to seconds
+        sec = n  ./  obj.bfs ;
+      
+      % Assign new buffer size to Gizmo
+      obj.syn.setParameterValue( obj.name , 'BufferSize' , n ) ;
+      
+      % Fetch new multi-channel buffer size
+      obj.ipar.BuffSizeMC.Value = obj.syn.getParameterValue( obj.name , ...
+        'BufferSizeMC' ) ;
+      
+      % Compute from this what the buffer size is in number of compressed
+      % samples
+      obj.cbsize = obj.ipar.BuffSizeMC.Value  ./  ...
+                   obj.ipar.ChanPerSamp.Value ;
+      
+      % Store buffer size, in seconds
+      obj.bufsiz = sec ;
+      
+    end % setbufsiz
+    
+    
+    % Set duration of response window, in seconds
+    function  setrespwin( obj , sec )
+      
+      % Error check input, guarantee double
+      sec = obj.checksec( sec ) ;
+      
+      % Maximum response window that can be buffered
+      maxwin = obj.ipar.BuffSize.Max ./ obj.bfs ;
+      
+      % Take the smaller value
+      sec = min( sec , maxwin ) ;
+      
+      % Convert to number of samples on the parent device, round up to next
+      % sample
+      n = ceil( sec ./ obj.pfs ) ;
+      
+        % Convert this value to seconds
+        sec = n  .*  obj.pfs ;
+      
+      % Assign new response window to Gizmo
+      obj.syn.setParameterValue( obj.name , 'RespWin' , n ) ;
+      
+      % Remember width of response window, in seconds
+      obj.respwin = sec ;
+      
+    end % setrespwin
+    
+    
+    % Error check input arg 'sec'. If it passes all tests then it is
+    % returned, and guaranteed to be double.
+    function  sec = checksec( ~ , sec )
+      
+      % Header string for error messages
+      hstr = 'sec must be ' ;
+      
+      % Must be a numeric type, not cell, object, char, etc.
+      if  ~ isnumeric( sec ) , error( [ hstr , 'a numeric type' ] )
+        
+      % Must be a scalar value
+      elseif  ~ isscalar( sec ) , error( [ hstr , 'scalar' ] )
+        
+      % Not a finite value, is not NaN or Inf
+      elseif  ~ isfinite( sec ), error( [ hstr, 'finite, no NaN or Inf' ] )
+        
+      % Must not be complex number
+      elseif  ~ isreal( sec ) , error( [ hstr , 'real-values' ] )
+        
+      % Must not be negative value
+      elseif  sec < 0 , error( [ hstr , 'non-negative' ] )
+        
+      end % error check
+      
+      % Is not double, cast value to double
+      if  ~ isa( sec , 'double' ) , sec = double( sec ) ; end
+      
+    end % checksec
+    
+    
+    % Read and return buffered data. Provide name of index parameter and
+    % buffer in inam and bnam. elpersamp is the number of words (e.g.
+    % 32-bit float or int) buffered per sample. For time-stamp buffers,
+    % elpersamp is 1. For multi-channel buffers, this is the ChanPerSamp
+    % parameter value.
+    function  dat = read( obj , inam , bnam , elpersamp )
+      
+      % Default return value
+      dat = [ ] ;
+      
+      % Number of multi-channel samples that were buffered
+      c = obj.ipar.Counter.Value ;
+      
+      % No buffered data, return empty
+      if  c == 0 , return , end
+        
+      % Buffer's index value, in buffer elements
+      i = obj.ipar.( inam ).Value ;
+        
+      % Number of buffered samples exceeds the capacity of the buffers. The
+      % circular buffers have looped. We need to read the tail end of the
+      % buffer in order to get the head of the data. 
+      % buffer = [ data tail , data head ].
+      if  c > obj.cbsize
+        
+        % Number of elements in buffer tail. Find by subtracting index from
+        % total number of elements in the buffer.
+        n = elpersamp .* obj.cbsize  -  i ;
+        
+        % Read in head of the data
+        dat = obj.syn.getParameterValues( obj.name , bnam , n , i ) ;
+        
+      end % fetch header
+      
+      % Number of elements to read from head of buffer i.e. tail of data if
+      % buffers have looped
+      n = i ;
+      
+      % Read tail of data (if looped) or entire set of buffered data, head
+      % to tail (no loop)
+      dat = [ dat ;
+              obj.syn.getParameterValues( obj.name , bnam , n , 0 ) ] ;
+      
+    end % read
+    
+    
+    % Read in buffered data. We assume that the strobe event has been sent
+    % to the windowed buffer Gizmo and that the full duration of the
+    % response window has passed. Otherwise, incomplete and misaligned data
+    % may be returned.
+    function  getdata( obj )
+      
+      % Gizmo parameters, we need current value of these to successfully
+      % read the buffers
+      for  P = { 'Mindex' , 'Sindex' , 'MCindex' , 'Counter' , ...
+          'EventMin' , 'EventSec' } , p = P{ 1 } ;
+        
+        % Read in value
+        obj.ipar.( p ).Value = obj.syn.getParameterValue( obj.name , p ) ;
+        
+      end % read pars
+      
+      % Gizmo buffer parameters
+      for  P = { 'Minutes' , 'Seconds' , 'MCsamples' } , p = P{ 1 } ;
+        
+        % Point to parameter info
+        par = obj.ipar.( p ) ;
+        
+        % Read buffered data
+        dat.( p ) = obj.read( par.inam , p , par.elpersamp ) ;
+        
+      end % buf pars
+      
+      
+      
+    end % winbufdat
     
     
   end % methods
