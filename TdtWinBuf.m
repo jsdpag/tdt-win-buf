@@ -108,6 +108,12 @@ classdef  TdtWinBuf  <  handle
     % Buffer size, in number of compressed multi-channel samples
     cbsize = [ ] ;
     
+    % Select a sub-set of channels. When compressing across channels, there
+    % may be empty placeholders for channels above the actual channel
+    % count. This property gives the actual channel count after de-
+    % compressing the data.
+    chsubsel = [ ] ;
+    
     % Buffer size in seconds, rounded up to next multi-channel sample at
     % buffering rate
     bufsiz = [ ] ;
@@ -277,8 +283,10 @@ classdef  TdtWinBuf  <  handle
         case { 'none' , 'channels' }, obj.cbsize = obj.ipar.BuffSize.Value;
           
         % Here, we worry. Each compressed and buffered MC sample contains
-        % more than one sample in the time domain.
-        case  'time' , obj.cbsize = obj.ipar.BuffSize.Value ./ obj.comfac;
+        % more than one sample in the time domain. The number of compressed
+        % MC samples that can be buffered is derived from MC buffer size.
+        case  'time' , obj.cbsize = obj.ipar.BuffSizeMC.Value  ./  ...
+                                   obj.ipar.ChanPerSamp.Value ;
           
         % We should never get here
         otherwise
@@ -287,6 +295,9 @@ classdef  TdtWinBuf  <  handle
             obj.comnam )
           
       end % comp type
+      
+      % Initialise to largest possible number of channels
+      obj.chsubsel = obj.maxchan ;
       
       % Determine size of buffer, in seconds. Divide number of
       % multi-channel samples by buffering rate. samples * seconds/sample.
@@ -322,6 +333,50 @@ classdef  TdtWinBuf  <  handle
     end % startbuff
     
     
+    % Set channel sub-selection. Channels 1 to 
+    function  setchsubsel( obj , val )
+      
+      % Maximum channel count after decompression
+      valmax = obj.maxchan ;
+      
+      % Value must be scalar integer
+      if  ~ isnumeric( val ) || ~ isscalar( val ) || ~ isreal( val ) || ...
+          ~ isfinite( val ) || mod( val , 1 ) ~= 0
+        
+        error( 'val must be scalar, finite, real-valued integer' )
+        
+      elseif  val < 1  ||  val > valmax
+        
+        error( 'val must be from range [1,%d]' , valmax )
+        
+      end % error check
+      
+      % Assign value
+      obj.chsubsel = val ;
+      
+    end % setchsubsel
+    
+    
+    % Maximum channel count after decompression
+    function  m = maxchan( obj )
+      
+      % Largest possible numer of channels
+      switch  obj.comnam
+        
+        % No compression or compressing across time
+        case { 'none', 'time' } , m = obj.ipar.ChanPerSamp.Value ;
+          
+        % Compressing across channels
+        case 'channels'
+          
+          % Initialise to largest possible number of channels
+          m = obj.ipar.ChanPerSamp.Value * obj.comfac ;
+          
+      end % chsubsel
+      
+    end % maxchan
+    
+    
     % Set the size of the buffer, in seconds
     function  setbufsiz( obj , sec )
       
@@ -341,6 +396,15 @@ classdef  TdtWinBuf  <  handle
       % Assign new buffer size to Gizmo
       obj.syn.setParameterValue( obj.name , 'BufferSize' , n ) ;
       
+      % Read new buffer size
+      obj.ipar.BuffSize.Value = obj.syn.getParameterValue( obj.name , ...
+        'BufferSize' ) ;
+      
+        % Failed to write, warn user
+        if  obj.ipar.BuffSize.Value ~= n
+          warning( 'Failed to change %s BuffSize to %d' , obj.name , n )
+        end
+      
       % Fetch new multi-channel buffer size
       obj.ipar.BuffSizeMC.Value = obj.syn.getParameterValue( obj.name , ...
         'BufferSizeMC' ) ;
@@ -348,7 +412,7 @@ classdef  TdtWinBuf  <  handle
       % Compute from this what the buffer size is in number of compressed
       % samples
       obj.cbsize = obj.ipar.BuffSizeMC.Value  ./  ...
-                   obj.ipar.ChanPerSamp.Value ;
+                  obj.ipar.ChanPerSamp.Value ;
       
       % Store buffer size, in seconds
       obj.bufsiz = sec ;
@@ -356,14 +420,36 @@ classdef  TdtWinBuf  <  handle
     end % setbufsiz
     
     
-    % Set duration of response window, in seconds
-    function  setrespwin( obj , sec )
+    % Set duration of response window, in seconds. Optional second argument
+    % is the buffering rate; default uses obj.bfs. This argument is useful
+    % mainly when buffering spikes. In this case, the maximum theoretical
+    % buffer rate equals the sampling rate of the parent device e.g.~25kHz.
+    % But this might be much higher than the maximum combined spiking rate
+    % across channels. The size of the response window is limited by the
+    % size of the buffer and the buffering rate. A smaller buffer could
+    % support a long response window if the actual buffering rate (spiking
+    % rate) was much less than the sampling rate of the parent device.
+    function  setrespwin( obj , sec , fs )
+      
+      % bfs not provided, use default
+      if  nargin < 3
+        
+        fs = obj.bfs ;
+        
+      % Error check
+      elseif  ~ isfloat( fs ) || ~ isscalar( fs ) || ~ isreal( fs ) || ...
+          ~ isfinite( fs ) || fs <= 0 || fs > obj.pfs
+      
+        error( [ 'Input arg fs must be scalar, finite, real-valued, ' , ...
+          'float in range (0,%.4f]Hz' ] , obj.pfs )
+        
+      end % check input arg fs
       
       % Error check input, guarantee double
       sec = obj.checksec( sec ) ;
       
       % Maximum response window that can be buffered
-      maxwin = obj.ipar.BuffSize.Max ./ obj.bfs ;
+      maxwin = obj.ipar.BuffSize.Max ./ fs ;
       
       % Take the smaller value
       sec = min( sec , maxwin ) ;
@@ -377,6 +463,15 @@ classdef  TdtWinBuf  <  handle
       
       % Assign new response window to Gizmo
       obj.syn.setParameterValue( obj.name , 'RespWin' , n ) ;
+      
+      % Read back response window
+      obj.ipar.RespWin.Value = obj.syn.getParameterValue( obj.name , ...
+        'RespWin' ) ;
+      
+        % Failed to write new value, warn user
+        if  obj.ipar.RespWin.Value ~= n
+          warning( 'Failed to change %s RespWin to %d' , obj.name , n )
+        end
       
       % Remember width of response window, in seconds
       obj.respwin = sec ;
@@ -416,9 +511,10 @@ classdef  TdtWinBuf  <  handle
     
     % Read and return buffered data. Provide name of index parameter and
     % buffer in inam and bnam. elpersamp is the number of words (e.g.
-    % 32-bit float or int) buffered per sample. For time-stamp buffers,
-    % elpersamp is 1. For multi-channel buffers, this is the ChanPerSamp
-    % parameter value.
+    % 32-bit float or int) buffered per sample; that is, the number of
+    % buffer elements consumed per multi-channel sample. For time-stamp
+    % buffers, elpersamp is 1. For multi-channel buffers, this is the
+    % ChanPerSamp parameter value.
     function  dat = read( obj , inam , bnam , elpersamp )
       
       % Default return value
@@ -436,7 +532,7 @@ classdef  TdtWinBuf  <  handle
       % Number of buffered samples exceeds the capacity of the buffers. The
       % circular buffers have looped. We need to read the tail end of the
       % buffer in order to get the head of the data. 
-      % buffer = [ data tail , data head ].
+      %   buffer = [ data tail , data head ]
       if  c > obj.cbsize
         
         % Number of elements in buffer tail. Find by subtracting index from
@@ -466,12 +562,14 @@ classdef  TdtWinBuf  <  handle
     % may be returned.
     function  getdata( obj )
       
+      %-- Read buffers --%
+      
       % Gizmo parameters, we need current value of these to successfully
       % read the buffers
       for  P = { 'Mindex' , 'Sindex' , 'MCindex' , 'Counter' , ...
           'EventMin' , 'EventSec' } , p = P{ 1 } ;
         
-        % Read in value
+        % Read fresh value from Gizmo
         obj.ipar.( p ).Value = obj.syn.getParameterValue( obj.name , p ) ;
         
       end % read pars
@@ -487,7 +585,119 @@ classdef  TdtWinBuf  <  handle
         
       end % buf pars
       
+      %-- Time stamps --%
       
+      % Converts from Gizmo 'Minutes' and 'Seconds' to the number of parent
+      % device samples
+      C = [ obj.secpermin ; 1 ] ;
+      
+      % Strobe event defines time zero for all buffered samples
+      t0 = [ obj.ipar.EventMin.Value , obj.ipar.EventSec.Value ]  *  C ;
+      
+      % Sample times relative to time zero
+      tim = [ dat.Minutes , dat.Seconds ] * C  -  t0 ;
+      
+      % Compression type
+      switch  obj.comnam
+        
+        % Multiple samples over time were compressed into each buffered
+        % multi-channel sample
+        case  'time'
+          
+          % Number of parent device samples per buffered sample. This is
+          % the period of each buffered sample.
+          P = obj.ipar.DownSamp.Value ;
+          
+          % Number of samples compressed into each buffered sample
+          N = obj.comfac ;
+          
+          % In this case, we must construct time stamps for compressed
+          % samples. The time stamp we have is for the final compressed
+          % sample. One buffered element contains [ s1 , s2 , ... sN ] when
+          % N samples over time are compressed per buffered sample. If the
+          % time of this buffered sample is tbuf then the time of sample si
+          % is tbuf - (N - i)P, where P is the period of a buffered sample
+          % (inverse buffering rate); take the unit of tbuf and P to be in
+          % parent device samples. Note that binary singleton expansion
+          % applies this operation to each element of column vector tim,
+          % returning a matrix with rows ordered by buffered samples, and
+          % columns ordered by compressed samples.
+          tim = tim  -  ( N - 1 : -1 : 0 ) .* P ;
+          
+          % Use column major indexing to return times of each un-compressed
+          % sample, in chronological order
+          tim = reshape( tim' , numel( tim ) , 1 ) ;
+          
+      end % comp type
+      
+      % Convert unit from samples to seconds
+      tim = tim ./ obj.pfs ;
+      
+      %-- Multi-channel samples --%
+      
+      % SynapseAPI returns double floating point values. Cast the numerical
+      % values into an appropriate numerical type, as indicated by
+      % properties of the Gizmo buffer parameter.
+      if  ~ strcmp( obj.rcast , 'double' )
+        dat.MCsamples = cast( dat.MCsamples , obj.rcast ) ;
+      end
+      
+      % If values were compressed into single MC buffer elements, then we
+      % break these appart into separate values through typecasting
+      if  ~ strcmp( obj.comnam , 'none' )
+        dat.MCsamples = typecast( dat.MCsamples , obj.tcast ) ;
+      end
+      
+      % Point to number of channels
+      N = obj.ipar.ChanPerSamp.Value ;
+      
+      % Compression type. After this, N will have number of channels.
+      switch  obj.comnam
+        
+        % Data compressed across channels
+        case  'channels'
+          
+          % Determine total number of channels. ChanPerSamp is the channel
+          % count of each buffered sample, or the number of elements per
+          % sample. Each element contains comfac compressed values. The
+          % total number of values per buffered sample is ChanPerSamp x
+          % comfac. For channel compression, this also equals the total
+          % number of channels, prior to compression.
+          N = N  *  obj.comfac ;
+        
+        % Data compressed across time. Here we need to be careful. There is
+        % a nested order to the column vector in dat.MCsamples. Compressed
+        % samples are ordered within blocks, each block is ordered by
+        % channel. Blocks of channels iterate across all buffered samples.
+        case  'time'
+          
+          % Re-arrange the data so that rows are ordered by compressed
+          % samples, columns by channel, and dim 3 by buffered samples
+          dat.MCsamples = reshape( dat.MCsamples , obj.comfac , N , [ ] ) ;
+          
+          % Permute the array such that channels are ordered across rows,
+          % compressed samples across columns, and buffered samples stay in
+          % dim 3
+          dat.MCsamples = permute( dat.MCsamples , [ 2 , 1 , 3 ] ) ;
+        
+      end % comp type
+      
+      % Re-order the data into a samples x channels matrix
+      dat.MCsamples = reshape( dat.MCsamples , N , [ ] )' ;
+      
+      % Check that number of time stamps equals the number of samples
+      if  numel( tim ) ~= size( dat.MCsamples , 1 )
+        error( 'Time-stamp to sample mismatch' )
+      end
+      
+      % Channel sub-selection is requested, discard un-wanted channels
+      if  obj.chsubsel < obj.ipar.ChanPerSamp.Value
+        dat.MCsamples( : , obj.chsubsel + 1 : end ) = [ ] ;
+      end
+      
+      % Store results
+      obj.time = tim ;
+      obj.data = dat.MCsamples ;
       
     end % winbufdat
     
