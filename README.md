@@ -18,6 +18,9 @@ Spike windowed buffering for 9 or more electrophysiology channels.
 
 SortCodes samples will contain only zeros if no spike was detected. MCSpkWinBuf only buffers a SortCode sample if at least once channel contains a spike. Hence, samples are buffered at irregular times. In order to know when spikes were samples, secondary buffers are used to store time stamps for every buffered SortCode sample. In addition, the strobe event is time-stamped so that buffered spike times can be zeroed on the event of interest.
 
+### SortCodes4C.rcx
+If ephys channel count is 1 to 8 then the spike sort Gizmos will output SortCodes with a channel count of 2. MC Gizmos and Components require a count of 4. This 'zero-pads' the 2 channel SortCodes with an additional 2 channels of zeros. It outputs a SortCodes00 with channel count 4 that can feed directly to MCSpkWinBuf.
+
 ### MCLfpWinBuf.rcx
 LFP windowed buffering for 9 or more electrophysiology channels. LFP and their time stamps are sampled continuously at approximately 1000Hz. The strobe event is also time stamped so that LFP signals can be zeroed on that event.
 
