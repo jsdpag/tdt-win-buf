@@ -91,13 +91,13 @@ classdef  TdtWinBuf  <  handle
     
     % Cast buffered data into this type after reading. Empty string takes
     % default return value from SynapseAPI, which is double.
-    rcast = 'double' ;
+    readcast = 'double' ;
     
     % Typecast buffered data into new numeric type. Read in data as a
     % string of bits, and cast every contiguous block of bits into this
     % type. Ignored if empty. This is required to decompress spike sorter
     % Gizmo SortCodes.
-    tcast = 'double' ;
+    typcast = 'double' ;
     
     % Name of compression method used
     comnam = '' ;
@@ -122,6 +122,12 @@ classdef  TdtWinBuf  <  handle
     % parent device clock
     respwin = [ ] ;
     
+    % Time window, in seconds relative to start of buffer response window.
+    % Any buffered samples that fall outside of this window are discarded.
+    % This is inclusive. Time stamps that exactly equal a window edge will
+    % be kept.
+    timewin = [ -Inf , +Inf ]
+    
     % Column vector of sample time stamps, in seconds
     time = [ ] ;
     
@@ -135,6 +141,8 @@ classdef  TdtWinBuf  <  handle
   
   % Functions that operate on a specific instance of a TdtWinBuf object
   methods
+    
+    %%-- Create an instance of TdtWinBuf object --%%
     
     % Create a new and unique instance of the TdtWinBuf class. Inputs are a
     % SynapseAPI object and a char array (string) naming the window buffer
@@ -235,10 +243,10 @@ classdef  TdtWinBuf  <  handle
         
         % Build name of integer type. Buffered data will be cast to this
         % type after reading in.
-        obj.rcast = sprintf( 'int%d' , obj.BITNUM ) ;
+        obj.readcast = sprintf( 'int%d' , obj.BITNUM ) ;
         
         % Unsigned integer
-        if  mcs.Min >= 0 , obj.rcast = [ 'u' , obj.rcast ] ; end
+        if  mcs.Min >= 0 , obj.readcast = [ 'u' , obj.readcast ] ; end
         
       end % MCsamples casting
       
@@ -248,10 +256,10 @@ classdef  TdtWinBuf  <  handle
         % Each 32-bit word can be divided into consecutive groups bits
         % (BitsPerVal bits per group). Breat each 32-bit word into
         % consecutive values with this type, to decompress the data.
-        obj.tcast = sprintf( 'int%d' , obj.ipar.BitsPerVal.Value ) ;
+        obj.typcast = sprintf( 'int%d' , obj.ipar.BitsPerVal.Value ) ;
         
         % Unsigned integer
-        if  mcs.Min >= 0 , obj.tcast = [ 'u' , obj.tcast ] ; end
+        if  mcs.Min >= 0 , obj.typcast = [ 'u' , obj.typcast ] ; end
         
       end % compression type
       
@@ -320,20 +328,10 @@ classdef  TdtWinBuf  <  handle
     end % TdtWinBuf
     
     
-    % Send a signal to the windowed buffer Gizmo to start or resume
-    % circular buffering
-    function  startbuff( obj )
-      
-      % Raise Gizmo's StartBuff parameter to high i.e. true, 1, ON
-      obj.syn.setParameterValue( obj.name , 'StartBuff' , 1 ) ;
-      
-      % Immediately lower it again
-      obj.syn.setParameterValue( obj.name , 'StartBuff' , 0 ) ;
-      
-    end % startbuff
+    %%-- Parameter setting --%%
     
     
-    % Set channel sub-selection. Channels 1 to 
+    % Set channel sub-selection. Channels 1 to val are kept after reading.
     function  setchsubsel( obj , val )
       
       % Maximum channel count after decompression
@@ -357,6 +355,172 @@ classdef  TdtWinBuf  <  handle
     end % setchsubsel
     
     
+    % Set the size of the buffer, in seconds. Optional second argument
+    % is the buffering rate; default uses obj.bfs. See checkfs for details.
+    function  setbufsiz( obj , sec , fs )
+      
+      % Error check input, guarantee double
+      sec = obj.checksec( sec ) ;
+      
+      % bfs not provided, use default
+      if  nargin < 3
+        fs = obj.bfs ;
+      else
+        fs = obj.checkfs( fs ) ; % Error check fs
+      end
+      
+      % Compute buffer size in number of MC samples that it can store, with
+      % or without compression. Round up to next sample.
+      n = ceil( sec .* fs ) ;
+      
+      % Cap at maximum buffer size
+      n = min( n , obj.ipar.BuffSize.Max ) ;
+      
+        % Convert this to seconds
+        sec = n  ./  fs ;
+      
+      % Assign new buffer size to Gizmo
+      obj.syn.setParameterValue( obj.name , 'BuffSize' , n ) ;
+      
+      % Read new buffer size
+      obj.ipar.BuffSize.Value = obj.syn.getParameterValue( obj.name , ...
+        'BuffSize' ) ;
+      
+        % Failed to write, warn user
+        if  obj.ipar.BuffSize.Value ~= n
+          warning( 'Failed to change %s BuffSize to %d' , obj.name , n )
+        end
+      
+      % Fetch new multi-channel buffer size
+      obj.ipar.BuffSizeMC.Value = obj.syn.getParameterValue( obj.name , ...
+        'BuffSizeMC' ) ;
+      
+      % Compute from this what the buffer size is in number of compressed
+      % samples
+      obj.cbsize = obj.ipar.BuffSizeMC.Value  ./  ...
+                  obj.ipar.ChanPerSamp.Value ;
+      
+      % Store buffer size, in seconds
+      obj.bufsiz = sec ;
+      
+    end % setbufsiz
+    
+    
+    % Set duration of response window, in seconds. Optional second argument
+    % is the buffering rate; default uses obj.bfs. See checkfs for details.
+    function  setrespwin( obj , sec , fs )
+      
+      % Error check input, guarantee double
+      sec = obj.checksec( sec ) ;
+      
+      % bfs not provided, use default
+      if  nargin < 3
+        fs = obj.bfs ;
+      else
+        fs = obj.checkfs( fs ) ; % Error check fs
+      end
+      
+      % Maximum response window that can be buffered
+      maxwin = obj.ipar.BuffSize.Max ./ fs ;
+      
+      % Take the smaller value
+      sec = min( sec , maxwin ) ;
+      
+      % Convert to number of samples on the parent device, round up to next
+      % sample
+      n = ceil( sec .* obj.pfs ) ;
+      
+        % Convert this value to seconds
+        sec = n  ./  obj.pfs ;
+      
+      % Assign new response window to Gizmo
+      obj.syn.setParameterValue( obj.name , 'RespWin' , n ) ;
+      
+      % Read back response window
+      obj.ipar.RespWin.Value = obj.syn.getParameterValue( obj.name , ...
+        'RespWin' ) ;
+      
+        % Failed to write new value, warn user
+        if  obj.ipar.RespWin.Value ~= n
+          warning( 'Failed to change %s RespWin to %d' , obj.name , n )
+        end
+      
+      % Remember width of response window, in seconds
+      obj.respwin = sec ;
+      
+    end % setrespwin
+    
+    
+    % Set time window. Buffered data outside of this window are discarded.
+    % Must be a 2 element numeric vector that is increasing. -Inf and +Inf
+    % are valid values, and accept all data before or after the response
+    % window.
+    function  settimewin( obj , w )
+      
+      % Error check
+      if  numel( w ) ~= 2 || ~ isnumeric( w ) || ~ isreal( w ) || ...
+          any( isnan( w ) ) || w( 1 ) >= w( 2 )
+        
+        error( [ 'Input arg w must be 2 element, real-valued, ' , ...
+          'non-NaN, numeric with w( 1 ) < w( 2 )' ] )
+        
+      end % error
+      
+      % For visualisation in call to disp, guarantee row vector
+      obj.timewin = reshape( w , 1 , 2 ) ;
+      
+    end % settimewin
+    
+    
+    %%-- Parameter setting utilities --%%
+    
+    
+    % Error check input arg 'sec'. If it passes all tests then it is
+    % returned, and guaranteed to be double.
+    function  sec = checksec( ~ , sec )
+      
+      % Must be a numeric type, not cell, object, char, etc.
+      if  ~isnumeric( sec ) || ~isscalar( sec ) || ~isfinite( sec ) || ...
+            ~isreal( sec ) || sec < 0
+        
+        error( [ 'Input arg sec must be scalar, finite, real-valued' , ...
+          'numeric value > 0' ] )
+        
+      end % error check
+      
+      % Is not double, cast value to double
+      if  ~ isa( sec , 'double' ) , sec = double( sec ) ; end
+      
+    end % checksec
+    
+    
+    % Error check input argument 'fs'. If it passes tests then it is
+    % returned. If not type 'double' then it is first cast to double before
+    % return. This argument is useful mainly when buffering spikes. In this
+    % case, the maximum theoretical buffer rate equals the sampling rate of
+    % the parent device e.g.~25kHz. But this might be much higher than the
+    % maximum combined spiking rate across channels. The size of the
+    % response window is limited by the size of the buffer and the
+    % buffering rate. A smaller buffer could support a long response window
+    % if the actual buffering rate (spiking rate) was much less than the
+    % sampling rate of the parent device.
+    function  fs = checkfs( obj , fs )
+      
+      % Error checking
+      if  ~ isfloat( fs ) || ~ isscalar( fs ) || ~ isreal( fs ) || ...
+          ~ isfinite( fs ) || fs <= 0 || fs > obj.pfs
+      
+        error( [ 'Input arg fs must be scalar, finite, real-valued, ' , ...
+          'float in range (0,%.4f]Hz' ] , obj.pfs )
+        
+      end % err
+      
+      % Is not double, cast value to double
+      if  ~ isa( fs , 'double' ) , fs = double( fs ) ; end
+      
+    end % checkfs
+    
+    
     % Maximum channel count after decompression
     function  m = maxchan( obj )
       
@@ -377,183 +541,20 @@ classdef  TdtWinBuf  <  handle
     end % maxchan
     
     
-    % Set the size of the buffer, in seconds
-    function  setbufsiz( obj , sec )
-      
-      % Error check input, guarantee double
-      sec = obj.checksec( sec ) ;
-      
-      % Compute buffer size in number of MC samples that it can store, with
-      % or without compression. Round up to next sample.
-      n = ceil( sec .* obj.bfs ) ;
-      
-      % Cap at maximum buffer size
-      n = max( n , obj.ipar.BuffSize.Max ) ;
-      
-        % Convert this to seconds
-        sec = n  ./  obj.bfs ;
-      
-      % Assign new buffer size to Gizmo
-      obj.syn.setParameterValue( obj.name , 'BufferSize' , n ) ;
-      
-      % Read new buffer size
-      obj.ipar.BuffSize.Value = obj.syn.getParameterValue( obj.name , ...
-        'BufferSize' ) ;
-      
-        % Failed to write, warn user
-        if  obj.ipar.BuffSize.Value ~= n
-          warning( 'Failed to change %s BuffSize to %d' , obj.name , n )
-        end
-      
-      % Fetch new multi-channel buffer size
-      obj.ipar.BuffSizeMC.Value = obj.syn.getParameterValue( obj.name , ...
-        'BufferSizeMC' ) ;
-      
-      % Compute from this what the buffer size is in number of compressed
-      % samples
-      obj.cbsize = obj.ipar.BuffSizeMC.Value  ./  ...
-                  obj.ipar.ChanPerSamp.Value ;
-      
-      % Store buffer size, in seconds
-      obj.bufsiz = sec ;
-      
-    end % setbufsiz
+    %%-- Buffering operations --%%
     
     
-    % Set duration of response window, in seconds. Optional second argument
-    % is the buffering rate; default uses obj.bfs. This argument is useful
-    % mainly when buffering spikes. In this case, the maximum theoretical
-    % buffer rate equals the sampling rate of the parent device e.g.~25kHz.
-    % But this might be much higher than the maximum combined spiking rate
-    % across channels. The size of the response window is limited by the
-    % size of the buffer and the buffering rate. A smaller buffer could
-    % support a long response window if the actual buffering rate (spiking
-    % rate) was much less than the sampling rate of the parent device.
-    function  setrespwin( obj , sec , fs )
+    % Send a signal to the windowed buffer Gizmo to start or resume
+    % circular buffering
+    function  startbuff( obj )
       
-      % bfs not provided, use default
-      if  nargin < 3
-        
-        fs = obj.bfs ;
-        
-      % Error check
-      elseif  ~ isfloat( fs ) || ~ isscalar( fs ) || ~ isreal( fs ) || ...
-          ~ isfinite( fs ) || fs <= 0 || fs > obj.pfs
+      % Raise Gizmo's StartBuff parameter to high i.e. true, 1, ON
+      obj.syn.setParameterValue( obj.name , 'StartBuff' , 1 ) ;
       
-        error( [ 'Input arg fs must be scalar, finite, real-valued, ' , ...
-          'float in range (0,%.4f]Hz' ] , obj.pfs )
-        
-      end % check input arg fs
+      % Immediately lower it again
+      obj.syn.setParameterValue( obj.name , 'StartBuff' , 0 ) ;
       
-      % Error check input, guarantee double
-      sec = obj.checksec( sec ) ;
-      
-      % Maximum response window that can be buffered
-      maxwin = obj.ipar.BuffSize.Max ./ fs ;
-      
-      % Take the smaller value
-      sec = min( sec , maxwin ) ;
-      
-      % Convert to number of samples on the parent device, round up to next
-      % sample
-      n = ceil( sec ./ obj.pfs ) ;
-      
-        % Convert this value to seconds
-        sec = n  .*  obj.pfs ;
-      
-      % Assign new response window to Gizmo
-      obj.syn.setParameterValue( obj.name , 'RespWin' , n ) ;
-      
-      % Read back response window
-      obj.ipar.RespWin.Value = obj.syn.getParameterValue( obj.name , ...
-        'RespWin' ) ;
-      
-        % Failed to write new value, warn user
-        if  obj.ipar.RespWin.Value ~= n
-          warning( 'Failed to change %s RespWin to %d' , obj.name , n )
-        end
-      
-      % Remember width of response window, in seconds
-      obj.respwin = sec ;
-      
-    end % setrespwin
-    
-    
-    % Error check input arg 'sec'. If it passes all tests then it is
-    % returned, and guaranteed to be double.
-    function  sec = checksec( ~ , sec )
-      
-      % Header string for error messages
-      hstr = 'sec must be ' ;
-      
-      % Must be a numeric type, not cell, object, char, etc.
-      if  ~ isnumeric( sec ) , error( [ hstr , 'a numeric type' ] )
-        
-      % Must be a scalar value
-      elseif  ~ isscalar( sec ) , error( [ hstr , 'scalar' ] )
-        
-      % Not a finite value, is not NaN or Inf
-      elseif  ~ isfinite( sec ), error( [ hstr, 'finite, no NaN or Inf' ] )
-        
-      % Must not be complex number
-      elseif  ~ isreal( sec ) , error( [ hstr , 'real-values' ] )
-        
-      % Must not be negative value
-      elseif  sec < 0 , error( [ hstr , 'non-negative' ] )
-        
-      end % error check
-      
-      % Is not double, cast value to double
-      if  ~ isa( sec , 'double' ) , sec = double( sec ) ; end
-      
-    end % checksec
-    
-    
-    % Read and return buffered data. Provide name of index parameter and
-    % buffer in inam and bnam. elpersamp is the number of words (e.g.
-    % 32-bit float or int) buffered per sample; that is, the number of
-    % buffer elements consumed per multi-channel sample. For time-stamp
-    % buffers, elpersamp is 1. For multi-channel buffers, this is the
-    % ChanPerSamp parameter value.
-    function  dat = read( obj , inam , bnam , elpersamp )
-      
-      % Default return value
-      dat = [ ] ;
-      
-      % Number of multi-channel samples that were buffered
-      c = obj.ipar.Counter.Value ;
-      
-      % No buffered data, return empty
-      if  c == 0 , return , end
-        
-      % Buffer's index value, in buffer elements
-      i = obj.ipar.( inam ).Value ;
-        
-      % Number of buffered samples exceeds the capacity of the buffers. The
-      % circular buffers have looped. We need to read the tail end of the
-      % buffer in order to get the head of the data. 
-      %   buffer = [ data tail , data head ]
-      if  c > obj.cbsize
-        
-        % Number of elements in buffer tail. Find by subtracting index from
-        % total number of elements in the buffer.
-        n = elpersamp .* obj.cbsize  -  i ;
-        
-        % Read in head of the data
-        dat = obj.syn.getParameterValues( obj.name , bnam , n , i ) ;
-        
-      end % fetch header
-      
-      % Number of elements to read from head of buffer i.e. tail of data if
-      % buffers have looped
-      n = i ;
-      
-      % Read tail of data (if looped) or entire set of buffered data, head
-      % to tail (no loop)
-      dat = [ dat ;
-              obj.syn.getParameterValues( obj.name , bnam , n , 0 ) ] ;
-      
-    end % read
+    end % startbuff
     
     
     % Read in buffered data. We assume that the strobe event has been sent
@@ -630,7 +631,9 @@ classdef  TdtWinBuf  <  handle
           
       end % comp type
       
-      % Convert unit from samples to seconds
+      % Convert unit from samples to seconds. It's worth mentioning here
+      % that all time stamps are relative to the parent device clock. This
+      % is why the parent sampling rate is used to change units.
       tim = tim ./ obj.pfs ;
       
       %-- Multi-channel samples --%
@@ -638,14 +641,14 @@ classdef  TdtWinBuf  <  handle
       % SynapseAPI returns double floating point values. Cast the numerical
       % values into an appropriate numerical type, as indicated by
       % properties of the Gizmo buffer parameter.
-      if  ~ strcmp( obj.rcast , 'double' )
-        dat.MCsamples = cast( dat.MCsamples , obj.rcast ) ;
+      if  ~ strcmp( obj.readcast , 'double' )
+        dat.MCsamples = cast( dat.MCsamples , obj.readcast ) ;
       end
       
       % If values were compressed into single MC buffer elements, then we
       % break these appart into separate values through typecasting
       if  ~ strcmp( obj.comnam , 'none' )
-        dat.MCsamples = typecast( dat.MCsamples , obj.tcast ) ;
+        dat.MCsamples = typecast( dat.MCsamples , obj.typcast ) ;
       end
       
       % Point to number of channels
@@ -691,15 +694,84 @@ classdef  TdtWinBuf  <  handle
       end
       
       % Channel sub-selection is requested, discard un-wanted channels
-      if  obj.chsubsel < obj.ipar.ChanPerSamp.Value
+      if  obj.chsubsel < obj.maxchan
         dat.MCsamples( : , obj.chsubsel + 1 : end ) = [ ] ;
       end
+      
+      % If a scaling factor was applied, then we must remove it. This
+      % requires casting to double.
+      if  obj.ipar.ScaleFactor.Value ~= 1
+        
+        dat.MCsamples = double( dat.MCsamples )  ./  ...
+          obj.ipar.ScaleFactor.Value ;
+        
+      end % scaling
+      
+      % A time window was provided, to crop away unwanted samples that lie
+      % outside
+      if  ~ all( isinf( obj.timewin ) )
+        
+        % Find data outside of time window
+        i = tim < obj.timewin( 1 ) | obj.timewin( 2 ) < tim ;
+        
+        % Discard data
+        tim( i ) = [ ] ;
+        dat.MCsamples( i , : ) = [ ] ;
+        
+      end % discard data outside of time window
       
       % Store results
       obj.time = tim ;
       obj.data = dat.MCsamples ;
       
-    end % winbufdat
+    end % getdata
+    
+    
+    % Read and return buffered data. Provide name of index parameter and
+    % buffer in inam and bnam. elpersamp is the number of words (e.g.
+    % 32-bit float or int) buffered per sample; that is, the number of
+    % buffer elements consumed per multi-channel sample. For time-stamp
+    % buffers, elpersamp is 1. For multi-channel buffers, this is the
+    % ChanPerSamp parameter value.
+    function  dat = read( obj , inam , bnam , elpersamp )
+      
+      % Default return value
+      dat = [ ] ;
+      
+      % Number of multi-channel samples that were buffered
+      c = obj.ipar.Counter.Value ;
+      
+      % No buffered data, return empty
+      if  c == 0 , return , end
+        
+      % Buffer's index value, in buffer elements
+      i = obj.ipar.( inam ).Value ;
+        
+      % Number of buffered samples exceeds the capacity of the buffers. The
+      % circular buffers have looped. We need to read the tail end of the
+      % buffer in order to get the head of the data. 
+      %   buffer = [ data tail , data head ]
+      if  c > obj.cbsize
+        
+        % Number of elements in buffer tail. Find by subtracting index from
+        % total number of elements in the buffer.
+        n = elpersamp .* obj.cbsize  -  i ;
+        
+        % Read in head of the data
+        dat = obj.syn.getParameterValues( obj.name , bnam , n , i ) ;
+        
+      end % fetch header
+      
+      % Number of elements to read from head of buffer i.e. tail of data if
+      % buffers have looped
+      n = i ;
+      
+      % Read tail of data (if looped) or entire set of buffered data, head
+      % to tail (no loop)
+      dat = [ dat ;
+              obj.syn.getParameterValues( obj.name , bnam , n , 0 ) ] ;
+      
+    end % read
     
     
   end % methods

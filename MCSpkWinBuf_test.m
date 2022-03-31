@@ -405,7 +405,7 @@ for  F = { 'bspk' , 'blfp' } , f = F{ 1 } ; giz = C.gizmo.( f ) ;
       mc = permute( mc , [ 2 , 1 , 3 ] ) ;
       
       % Don't forget to decompress the time vector. Add new time stamps.
-      tim = tim' + [ 0 ; 1 / ( C.fs / giz.DownSamp ) ] ;
+      tim = tim' - [ 1 / ( C.fs / giz.DownSamp ) ; 0 ] ;
       
       % Convert back into column vector
       tim = tim( : ) ;
