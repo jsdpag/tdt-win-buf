@@ -16,16 +16,51 @@ classdef  Welford
 % Each new sample of data is accumulated using the plus (+) operator. Data
 % can be accumulated within an indexed sub-section of the Welford array.
 % 
-% The current running average is obtained from the 'avg' property. While
-% the running variance is obtained through methods var, std, or sem.
+% The current running sample mean is obtained from the 'avg' property.
+% While the running sample variance is obtained through methods var, std,
+% or sem.
 % 
-% Compatible with many basic functions that can be applied to numeric
-% arrays. The following handle Welford arrays properly: size(), numel(),
-% isempty(), isscalar(), isvector(), ismatrix(), cat() and horizontal/
-% vertical concatenation syntax, permute(), reshape(), repmat().
+% The following handle Welford arrays properly: size(), numel(), ndims(),
+% cat() and horizontal/vertical concatenation syntax, permute(), reshape(),
+% repmat(), isscalar(), isvector(), ismatrix(), isempty().
 % 
 % Example - Say that multi-variate random variable X with size N x 1 is
-% sampled under one of M conditions
+%   sampled under one of M conditions. A size N x M Welford array is needed
+%   to maintain a running estimate of the sample mean and variance of X.
+%   Create a new Welford array with no accumulated data by:
+%   
+%     w = Welford( N , M )
+%   
+%   The syntax is similar to zeros or ones.
+%   
+%   X is sampled under condition i. It is accumulated by the Welford array
+%   using:
+%   
+%     w( : , i ) = w( : , i ) + X
+%   
+%   Retrieve the current sample mean under both conditions:
+%   
+%     w.avg
+% 
+%   Or under condition i:
+%   
+%     w.avg( : , i ) or w( : , i ).avg
+%   
+%   the former is expected to be more efficient for property access.
+%   
+%   Likewise, retrieve the number of samples accumulated by:
+%   
+%     w.count          % all conditions
+%     w.count( : , i ) % condition i
+%     w( : , i ).count % condition i
+%   
+%   Get the current estimated standard error of the mean for ...
+%   
+%     w.sem             % all conditions
+%     sem( w )          % all conditions
+%     w.sem( : , i )    % condition i
+%     w( : , i ).sem    % condition i
+%     sem( w( : , i ) ) % condition i
 % 
 % Written by Jackson Smith - April 2022 - Fries Lab (ESI Frankfurt)
 %   
@@ -414,6 +449,8 @@ classdef  Welford
     end
     
     function  n = numel( w ) , n = numel( w.count ) ; end
+    
+    function  n = ndims( w ) , n = ndims( w.count ) ; end
     
     function  w = cat( dim , varargin )
       
