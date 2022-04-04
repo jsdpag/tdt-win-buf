@@ -15,10 +15,21 @@ classdef  Welford
 % 
 % Each new sample of data is accumulated using the plus (+) operator. Data
 % can be accumulated within an indexed sub-section of the Welford array.
+% The accumulated data must be a numerical or logical array.
 % 
 % The current running sample mean is obtained from the 'avg' property.
 % While the running sample variance is obtained through methods var, std,
 % or sem.
+% 
+% If only logical values (or 1's and 0's) are accumulated then that data
+% can be interpreted as the outcomes from a series of Bernoulli trials. In
+% this case, the .avg property of the Welford array can be taken as the
+% current estimated probability of a successful outcome. In this context,
+% the outcome of var, std, and sem are invalid because they implicitly
+% assume a normally (Gaussian) distributed random variable. Instead, use
+% binpci to return the estimated binomial proportion confidence interval.
+% It is up to the user to ensure that the proper input or function is
+% called.
 % 
 % The following handle Welford arrays properly: size(), numel(), ndims(),
 % cat() and horizontal/vertical concatenation syntax, permute(), reshape(),
@@ -157,14 +168,20 @@ classdef  Welford
       
       %--- Error check other calls to Welford( ... ) ---%
       
-      % First sweep of error checks, we need scalar numbers
-      elseif  ~ all( cellfun( @isscalar  , varargin ) )
-             
-        error( 'Size inputs must be scalar.' )
-        
+      % First sweep of error checks, we need numeric input
       elseif  ~ all( cellfun( @isnumeric , varargin ) )
         
         error( 'Size inputs must be numeric.' )
+        
+      % There is more than one input argument, these must all be scalar
+      elseif  nargin > 1  &&  ~ all( cellfun( @isscalar  , varargin ) )
+             
+        error( 'Size inputs sz1, ... szN must all must be scalar.' )
+        
+      % We reach this check only if nargin is 1. Make sure it is a vector.
+      elseif  ~ isvector( varargin{ 1 } )
+        
+        error( 'Size argument sz must be a vector' )
         
       end % cell array error check
       
@@ -236,6 +253,50 @@ classdef  Welford
       
     end % sem
     
+    
+    function  ci = binpci( w , p )
+    % 
+    % ci = binpci( w )
+    % ci = binpci( w , p )
+    % 
+    % Computes the Binomial proportion confidence interval, assuming that
+    % Welford array w has only been used to accumulate data consisting of
+    % 1's (ones, successes) or 0's (zeros, failures). In other words, the
+    % outcome of Bernoulli trials. In this case, w.avg contains the
+    % estimated probability of a successful outcome. It is up to the user
+    % to ensure that no other values are accumulated. Only the magnitude of
+    % the confidence interval is returned. This must be added and
+    % subtracted from w.avg to get the upper and lower confidence limits.
+    % By default, the 95% confidence interval is returned (p = 0.95).
+    % Provide the second, optional input argument p as a probability  value
+    % (bounded between 0 and 1) in order to return a different confidence
+    % interval e.g. call binpci( w , 0.99 ) to obtain the 99% confidence
+    % interval
+    % 
+      
+      % p not provided, use default
+      if  nargin < 2 , p = 0.95 ; end
+      
+      % Error check p
+      if  ~ isfloat( p ) || ~ isscalar( p ) || ~ isfinite( p ) || ...
+          ~ isreal( p ) || p <= 0 || p >= 1
+        
+        error( [ 'p must be a scalar floating point, finite, ' , ...
+          'real-valued number between 0 and 1' ] )
+        
+      end % err check
+      
+      % Guarantee p is double
+      if  ~ isa( p , 'double' ) , p = double( p ) ; end
+      
+      % Calculate z-score associated with p-value p
+      z = abs( norminv( ( 1 - p ) / 2 ) ) ;
+      
+      % Return confidence interval
+      ci = z .* sqrt( w.avg .* ( 1 - w.avg ) ./ w.count ) ;
+      
+    end % binpci
+    
      
     function  w = plus( a , b )
     % 
@@ -243,32 +304,22 @@ classdef  Welford
     % x + w
     %
     % Accumulates data sample x into existing Welford array w. x must be
-    % numeric and have the same size as w.
+    % numeric or logical and have the same size as w.
     %  
       
       %-- Input check --%
       
-      % Form w + x
-      if      isa( a , 'Welford' )  &&  isnumeric( b )
-        
-        % Assign meaningful names
-        w = a ;  x = b ;
-        
-      elseif  isa( b , 'Welford' )  &&  isnumeric( a )
-        
-        % Assign meaningful names
-        w = b ;  x = a ;
-        
+      % Assign meaningful names when operator has form:
+      if      typechk( a , b ) , w = a ;  x = b ; % w + x
+      elseif  typechk( b , a ) , w = b ;  x = a ; % x + w
       else
-        
-        error( 'Expecting one Welford array and one numeric array' )
-        
-      end % find Welford arg
+        error( 'Expects a Welford array and a numeric or logical array' )
+      end
       
       % Same size?
       if  ~ isequal( size( w ) , size( x ) )
         
-        error( 'w and x must have the same size.' )
+        error( 'Arguments must have the same size.' )
         
       end % size chk
       
@@ -293,7 +344,17 @@ classdef  Welford
       % Accumulate sum of squares of differences
       w.M2 = w.M2  +  dold .* dnew ;
       
+      %-- Sub-routine --%
       
+      % Returns true if warg if a Wellford array, and if narg is numeric or
+      % logical.
+      % 
+      function  out = typechk( warg , narg )
+        
+        out = isa( warg , 'Welford' )  &&  ...
+          ( isnumeric( narg ) || islogical( narg ) ) ;
+        
+      end % typechk
     end % plus
     
     
