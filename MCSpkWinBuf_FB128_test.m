@@ -33,6 +33,9 @@ C.tun.prop = { 1e3 , 0 , 1 } ;
 % Stimulus values to test
 C.stim = -3.5 : 0.5 : +3.5 ;
 
+% Latency of neuronal response, in milliseconds
+C.lat = 30 ;
+
 % Time window, baseline and response
 C.win = [ -500 , C.tun.prop{ 1 } ] ;
 
@@ -95,7 +98,7 @@ for  F = fieldnames( C.buf )' , f = F{ 1 } ;
   C.tdt.( f ) = TdtWinBuf( C.syn , C.buf.( f ) ) ;
   
   % Make sure that response window is long enough
-  C.tdt.( f ).setrespwin( C.rawwin( 2 ) )
+  C.tdt.( f ).setrespwin( C.rawwin( 2 ) ./ 1e3 )
   
   % Return only data points within this time range
   C.tdt.( f ).settimewin( C.rawwin ) ;
@@ -177,8 +180,7 @@ for  F = fieldnames( C.buf )' , f = F{ 1 } ;
       siz = size( x ) ;
       
       % New axes, or retrieve existing
-      ax = subplot( C.tdt.( f ).chsubsel , 2 , i , 'Tag' , ...
-        sprintf( 'ch%d_%s' , row , typ ) ) ;
+      ax = subplot( C.tdt.( f ).chsubsel , 2 , i ) ;
       
       % Guarantee hold is off before object creation
       hold off
@@ -190,8 +192,9 @@ for  F = fieldnames( C.buf )' , f = F{ 1 } ;
       errorbar( x , y , e , 'k' )
       
       % Formatting
+      ax.Tag = sprintf( 'ch%d_%s' , row , typ ) ;
       axis tight
-      xlim( C.win )
+      xlim( x( [ 1 , end ] ) )
       grid on
       
       % Title on first row
@@ -202,6 +205,9 @@ for  F = fieldnames( C.buf )' , f = F{ 1 } ;
   
 end % buf fields
 
+% Done
+clearvars( '-except' , C.keep{ : } )
+
 
 %% --- Run Simulation --- %%
 
@@ -209,13 +215,13 @@ end % buf fields
 
 % Fresh Welford array, dimensions: [ N samples , N channels , data types ]
 W.psth = Welford( numel( C.bin  ) - 1 , C.tdt.spk.chsubsel , 3 ) ;
-W.stim = Welford( numel( C.stim )     , C.tdt.spk.chsubsel , 3 ) ;
+W.tune = Welford( numel( C.stim )     , C.tdt.spk.chsubsel , 3 ) ;
 
 % Dim 3 index
 w3 = struct( 'spk' , 1 , 'mua' , 2 , 'lfp' , 3 ) ;
 
 % Figures, reset UserData to scalar true i.e. continue trials loop.
-for  h = findobj( 'Type' , 'figure' ) , h.UserData = true ; end
+for  h = findobj( 'Type' , 'figure' )' , h.UserData = true ; end
 
 % Error bar objects
 for  h = findobj( 'Type' , 'errorbar' )'
@@ -227,8 +233,14 @@ for  h = findobj( 'Type' , 'errorbar' )'
   
 end % err bars
 
+% Update plots
+drawnow
+
 % Point to first figure
 h = findobj( 'Type' , 'figure' , 'Name' , 'spk' ) ;
+
+% Clear command window
+clc
 
 %-- Simulation --%
 
@@ -241,8 +253,9 @@ while  h.UserData , N = N + 1 ;
   % Randomly sample a stimulus value, return its index
   s = ceil( numel( C.stim ) * rand ) ;
   
-  % Compute duration of neuronal response to stimulus onset
-  t = C.tun.fun( C.stim( s ) , C.tun.prop{ : } ) ;
+  % Compute duration of neuronal response to stimulus onset, round up to
+  % next millisecond. Includes latency.
+  t = ceil( C.tun.fun( C.stim( s ) , C.tun.prop{ : } ) )  +  C.lat ;
   
   % Resume data buffering in each TDT windowed buffer
   for  F = fieldnames( C.buf )' , f = F{ 1 } ; C.tdt.( f ).startbuff ; end
@@ -252,15 +265,16 @@ while  h.UserData , N = N + 1 ;
     N , C.stim( s ) , abs( C.win( 1 ) ) )
   
   % Wait for baseline
-  sleep( abs( C.win( 1 ) ) )
+  sleep( abs( C.rawwin( 1 ) ) )
   
   % Report next step
   fprintf( 'Stimulus on for %dms\n' , C.win( 2 ) )
   
   % Present stimulus
-  DaqServer.EventMarker( 1 )
-  sleep( C.win( 2 ) )
-  DaqServer.EventMarker( 0 )
+  DaqServer.EventMarker( 1 ) ;  sleep( t ) ;  DaqServer.EventMarker( 0 ) ;
+  
+  % Wait for remainder of trial
+  sleep( max( C.rawwin( 2 ) - t , 0 ) )
   
   % Report stimulus event and next buffer operation
   fprintf( 'Stimulus off\nRetrieve buffered data\n' )
@@ -298,7 +312,7 @@ while  h.UserData , N = N + 1 ;
     end % resp per sec
     
     % Add data to Welford array
-    W.stim( s , : , w3.( f ) ) = W.stim( s , : , w3.( f ) )  +  X ;
+    W.tune( s , : , w3.( f ) ) = W.tune( s , : , w3.( f ) )  +  X ;
     
     % Get millisecond-binned data
     switch  f
@@ -310,8 +324,9 @@ while  h.UserData , N = N + 1 ;
         dat = logical( dat ) ;
         
         % Bin separately for each channel
-        X = arrayfun( @( ch ) histcounts( tim( dat( : , ch ) ), C.bin ),...
-          1 : C.tdt.( f ).chsubsel , 'UniformOutput' , false ) ;
+        X = arrayfun( ...
+          @( ch ) histcounts( tim( dat( : , ch ) ) , C.bin )' , ...
+            1 : C.tdt.( f ).chsubsel , 'UniformOutput' , false ) ;
         
         % Collapse into numeric array
         X = [ X{ : } ] ;
@@ -343,9 +358,9 @@ while  h.UserData , N = N + 1 ;
         e = findobj( ax , 'Type' , 'errorbar' ) ;
         
         % Update data from Welford array
-        h.YData( : ) = W.( typ ).avg( : , row , w3.( f ) ) ;
-        h.YNegativeDelta( : ) = W.( typ )( : , row , w3.( f ) ).sem ;
-        h.YPositiveDelta( : ) = h.YNegativeDelta ;
+        e.YData( : ) = W.( typ ).avg( : , row , w3.( f ) ) ;
+        e.YNegativeDelta( : ) = W.( typ )( : , row , w3.( f ) ).sem ;
+        e.YPositiveDelta( : ) = e.YNegativeDelta ;
         
       end % types
     end % chan
@@ -353,7 +368,7 @@ while  h.UserData , N = N + 1 ;
   end % buf
   
   % Point to all figures
-  h = cellfun( @( f ) findobj( 'Type' , 'figure' , 'Tag' , f ) , ...
+  h = cellfun( @( f ) findobj( 'Type' , 'figure' , 'Name' , f ) , ...
     fieldnames( C.buf ) ) ;
   
   % Return figure userdata, which records whether or not 'q' has been typed
@@ -361,12 +376,21 @@ while  h.UserData , N = N + 1 ;
   
   % Test whether all are true, store result in UserData of first figure in
   % list
-  h( 1 ).UserData = all( x ) ;
+  h( 1 ).UserData = all( [ x{ : } ] ) ;
   
   % Point to only the first figure in list. h.UserData controls loop.
   h( 2 : end ) = [ ] ;
   
+  % Update figures
+  drawnow
+  
 end % trial loop
+
+% Report
+fprintf( 'Quit simulation\n' )
+
+% Done
+clearvars( '-except' , C.keep{ : } )
 
 
 %% --- Done --- %%
