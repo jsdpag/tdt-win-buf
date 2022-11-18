@@ -13,6 +13,9 @@ Generates 4 to 32 channels of wideband, signals that simulate extracellular reco
 
 Parameters including the noise and LFP amplitude, LFP frequency and phase, spike rate, and modulation of spike rate by LFP phase can all be set from the ARCADE PC using SynapaseAPI commands.
 
+### StimRespSim.rcx
+This can be used to simulate the stimulus responses of sensory neurons. When triggered, it first counts down a bottom-up latency. Then it generates a high TTL output for the duration of a stimulus response, before lowering the output again. Durations are set in milliseconds. In combination with a TDT FB128, or similar, it can be used to test stimulus-locked processing of buffered neuronal data.
+
 ### MCSpkWinBuf.rcx
 Spike windowed buffering for 9 or more electrophysiology channels.
 
