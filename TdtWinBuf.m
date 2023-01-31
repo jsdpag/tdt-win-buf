@@ -758,7 +758,9 @@ classdef  TdtWinBuf  <  handle
         n = elpersamp .* obj.cbsize  -  i ;
         
         % Read in head of the data
-        dat = obj.syn.getParameterValues( obj.name , bnam , n , i ) ;
+        if  n > 0
+          dat = obj.syn.getParameterValues( obj.name , bnam , n , i ) ;
+        end
         
       end % fetch header
       
@@ -768,8 +770,10 @@ classdef  TdtWinBuf  <  handle
       
       % Read tail of data (if looped) or entire set of buffered data, head
       % to tail (no loop)
-      dat = [ dat ;
-              obj.syn.getParameterValues( obj.name , bnam , n , 0 ) ] ;
+      if  n > 0
+        dat = [ dat ;
+                obj.syn.getParameterValues( obj.name , bnam , n , 0 ) ] ;
+      end
       
     end % read
     
