@@ -575,6 +575,13 @@ classdef  TdtWinBuf  <  handle
         
       end % read pars
       
+      % There is no data to retrieve. Return empties.
+      if  obj.ipar.Counter == 0
+        obj.time = zeros( 0 , 1 ) ;
+        obj.data = zeros( 0 , obj.chsubsel ) ;
+        return
+      end
+      
       % Gizmo buffer parameters
       for  P = { 'Minutes' , 'Seconds' , 'MCsamples' } , p = P{ 1 } ;
         
