@@ -576,7 +576,7 @@ classdef  TdtWinBuf  <  handle
       end % read pars
       
       % There is no data to retrieve. Return empties.
-      if  obj.ipar.Counter == 0
+      if  obj.ipar.Counter.Value == 0
         obj.time = zeros( 0 , 1 ) ;
         obj.data = zeros( 0 , obj.chsubsel ) ;
         return
